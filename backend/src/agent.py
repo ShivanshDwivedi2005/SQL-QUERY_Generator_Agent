@@ -25,6 +25,9 @@ class SQLAgent:
         
         genai.configure(api_key=GEMINI_API_KEY)
         
+        # Store database path
+        self.db_path = db_path
+        
         # Initialize database tools
         self.db_tools = DatabaseTools(db_path)
         self.database_available = self.db_tools.available
@@ -33,59 +36,43 @@ class SQLAgent:
         if self.database_available:
             self.system_prompt = """You are an expert SQL assistant that helps users query databases using natural language.
 
-IMPORTANT - SQL GENERATION:
-- When user asks for SQL (e.g., "write query", "create SQL", "show me the query"): ALWAYS generate a complete, executable SQL query
-- Use reasonable assumptions for table and column names based on the question context
-- Make the SQL as complete as possible with WHERE, JOIN, GROUP BY clauses as needed
-- Only execute if schema information is available; otherwise just provide the SQL
+IMPORTANT - ALWAYS EXECUTE QUERIES:
 
-Your approach when SQL is requested:
-1. **Explore schema**: Use get_schema_info to understand available tables (if database available)
-2. **Make assumptions**: If schema not available, assume standard table/column names based on question
-3. **Generate SQL**: Create a correct, efficient SQL query with all necessary clauses
-4. **Execute if possible**: Try to execute the query if database is available
-5. **Return the SQL**: Always return the generated SQL query
+**For SQL/Data Requests:**
+1. Use get_schema_info() to understand database structure
+2. Generate the appropriate SQL query
+3. ALWAYS call execute_sql() to run the query and get results
+4. Return both the SQL and the actual data results
 
-When SQL is NOT requested:
-- Answer the question directly without generating SQL
+**For General Questions:**
+- Answer directly without SQL
+- Keep it concise (2-3 sentences)
 
-**Important guidelines:**
-- When generating SQL, use reasonable assumptions for table names (users, customers, orders, products, etc.)
-- Use column names that make sense (id, name, email, date, amount, status, etc.)
-- Always include appropriate LIMIT clauses for safety
-- Handle ambiguous terms by stating assumptions (e.g., "assuming recent = last 30 days")
-- Be precise but flexible with table and column names
+CRITICAL: When users ask for data, you MUST execute the SQL query and return actual results. Never just generate SQL without executing it.
 
-Think step by step and explain your reasoning clearly."""
+Your workflow for data queries:
+Step 1: get_schema_info() → understand tables/columns
+Step 2: Generate SQL query
+Step 3: execute_sql(query) → get actual data
+Step 4: Return results with the query
+
+Always execute queries to provide complete answers."""
         else:
-            self.system_prompt = """You are an expert SQL assistant that helps users with SQL queries.
-Since no database is available, you will generate SQL code based on reasonable assumptions about typical database schemas.
+            self.system_prompt = """You are an expert SQL assistant. No database is connected, so you can only generate SQL queries.
 
-IMPORTANT - SQL GENERATION:
-- When user asks for SQL (e.g., "write query", "create SQL", "show me the query"): ALWAYS generate a complete, executable SQL query
-- Use reasonable assumptions for table and column names based on the question context
-- Make the SQL as complete as possible with WHERE, JOIN, GROUP BY clauses as needed
-- Provide the SQL query as your main output
+**When user asks for SQL or data queries:**
+- Generate complete, executable SQL queries
+- Use standard table names (users, customers, orders, products, employees)
+- Use common columns (id, name, email, date, amount, status)
+- Include LIMIT clauses for safety
+- State your assumptions clearly
+- Note that the query cannot be executed without a database
 
-Your approach when SQL is requested:
-1. **Understand the question**: Analyze what data/information is needed
-2. **Make assumptions**: Assume standard table names (users, customers, orders, products, etc.)
-3. **Generate SQL**: Create a correct, efficient SQL query with all necessary clauses
-4. **Explain assumptions**: State what table/column names you assumed
-5. **Return the SQL**: Provide the complete SQL query
+**When user asks general questions:**
+- Answer directly without SQL
+- Be concise and clear
 
-When SQL is NOT requested:
-- Answer the question directly without generating SQL
-
-**Important guidelines:**
-- Use common table names: users, customers, orders, products, employees, sales, transactions, etc.
-- Use common column names: id, name, email, date, amount, status, created_at, updated_at, etc.
-- Always include LIMIT clauses for safety (e.g., LIMIT 100)
-- Make reasonable assumptions and state them clearly
-- Provide complete, executable SQL queries
-- Format SQL nicely with proper indentation
-
-Think step by step and explain your reasoning clearly."""
+Provide helpful SQL queries with clear assumptions about table structure."""
         
         # Define tools for function calling
         self.tools = self._define_tools()
@@ -200,13 +187,25 @@ Think step by step and explain your reasoning clearly."""
             return {"error": f"Unknown tool: {tool_name}"}
     
     def _is_sql_request(self, question: str) -> bool:
-        """Check if the question is asking for SQL generation or execution."""
+        """Check if the question is asking for data query or SQL generation."""
         sql_keywords = [
-            'write', 'create', 'sql', 'query', 'select', 'show me the query',
-            'what query', 'generate', 'code', 'command', 'how to query',
-            'what would', 'what would the query', 'give me a query'
+            'show', 'list', 'get', 'find', 'fetch', 'retrieve', 'display',
+            'what are', 'how many', 'count', 'total', 'sum', 'average',
+            'top', 'bottom', 'first', 'last', 'all', 'sql', 'query',
+            'write query', 'create query', 'generate sql', 'select'
+        ]
+        # Questions that are NOT SQL requests
+        non_sql_keywords = [
+            'what is', 'explain', 'how does', 'why', 'difference between',
+            'definition', 'meaning', 'purpose', 'concept'
         ]
         question_lower = question.lower().strip()
+        
+        # Check if it's explicitly not an SQL request
+        if any(keyword in question_lower for keyword in non_sql_keywords):
+            return False
+        
+        # Check if it's an SQL request
         return any(keyword in question_lower for keyword in sql_keywords)
     
     def process_question(self, question: str, show_reasoning: bool = True) -> Dict[str, Any]:
@@ -356,26 +355,81 @@ Think step by step and explain your reasoning clearly."""
                             if isinstance(sql, tuple):
                                 sql = next((s for s in sql if s), "")
                             sql = sql.strip() if sql else ""
+                            
+                            # If we extracted SQL and database is available, execute it
+                            if sql and self.database_available:
+                                try:
+                                    exec_result = self._execute_tool("execute_sql", {"sql": sql})
+                                    if exec_result.get("success"):
+                                        rows = exec_result.get("results", [])
+                                        columns = exec_result.get("columns", [])
+                                        reasoning.add_step(
+                                            "Query executed",
+                                            f"Found {len(rows)} result(s)",
+                                            "✓"
+                                        )
+                                except Exception as e:
+                                    # If execution fails, still return the SQL
+                                    reasoning.add_step(
+                                        "Execution note",
+                                        f"SQL generated but execution had issues: {str(e)}",
+                                        "⚠️"
+                                    )
                 
-                # Create reasoning steps in the format expected by frontend
-                # Take first 2 steps as key reasoning points
-                reasoning_steps = reasoning.steps[:2] if reasoning.steps else []
-                
-                return {
-                    "success": True,
-                    "question": question,
-                    "summary": part.text,
-                    "reasoning": reasoning_steps,
-                    "sql": sql,
-                    "result": {
-                        "columns": columns,
-                        "rows": rows
-                    },
-                    "status": "success" if rows else ("empty" if sql else "success"),
-                    "isExpensive": False,
-                    "databaseAvailable": self.database_available,
-                    "isSqlRequest": is_sql_request
-                }
+                # Format response based on request type
+                if is_sql_request and sql:
+                    return {
+                        "success": True,
+                        "question": question,
+                        "summary": "",
+                        "reasoning": [],  # No reasoning for SQL queries
+                        "sql": sql,
+                        "result": {
+                            "columns": columns,
+                            "rows": rows
+                        },
+                        "status": "success" if rows else "empty",
+                        "databaseAvailable": self.database_available,
+                        "isSqlRequest": True
+                    }
+                else:
+                    # General question - show answer in 2-point reasoning format
+                    answer_lines = part.text.strip().split('\n')
+                    # Extract key points (max 2)
+                    key_points = []
+                    for line in answer_lines:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            key_points.append({
+                                "step": f"Point {len(key_points) + 1}",
+                                "detail": line,
+                                "icon": "💡"
+                            })
+                            if len(key_points) >= 2:
+                                break
+                    
+                    # If we didn't get 2 points, create them from summary
+                    if len(key_points) < 2:
+                        sentences = part.text.replace('\n', ' ').split('. ')
+                        key_points = [
+                            {"step": "Point 1", "detail": sentences[0] + '.', "icon": "💡"},
+                            {"step": "Point 2", "detail": sentences[1] + '.' if len(sentences) > 1 else "Additional context provided above.", "icon": "💡"}
+                        ]
+                    
+                    return {
+                        "success": True,
+                        "question": question,
+                        "summary": part.text,
+                        "reasoning": key_points[:2],  # Exactly 2 points
+                        "sql": "",
+                        "result": {
+                            "columns": [],
+                            "rows": []
+                        },
+                        "status": "success",
+                        "databaseAvailable": self.database_available,
+                        "isSqlRequest": False
+                    }
             else:
                 break
         
