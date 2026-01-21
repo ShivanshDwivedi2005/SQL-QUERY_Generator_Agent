@@ -5,6 +5,7 @@ import os
 import shutil
 from dotenv import load_dotenv
 from pathlib import Path
+import uvicorn
 
 load_dotenv()
 
@@ -302,3 +303,7 @@ def health_check():
         "agent_initialized": hasattr(app.state, 'agent') and app.state.agent is not None,
         "database_available": hasattr(app.state, 'agent') and app.state.agent and app.state.agent.database_available
     }
+
+
+port = int(os.environ.get("PORT", 8000))
+uvicorn.run(app, host="0.0.0.0", port=port)
