@@ -143,7 +143,7 @@ async def upload_database(file: UploadFile = File(...)):
         # Verify it's a valid SQLite database
         import sqlite3
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(str(db_path), check_same_thread=False)
             conn.execute("SELECT 1")
             conn.close()
         except sqlite3.DatabaseError:
@@ -241,7 +241,7 @@ def view_database():
     try:
         import sqlite3
         db_path = app.state.agent.db_tools.db_path
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
         cursor = conn.cursor()
         
         # Get all tables

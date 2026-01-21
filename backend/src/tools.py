@@ -27,7 +27,7 @@ class DatabaseTools:
                 self.available = False
                 return
             
-            self.connection = sqlite3.connect(self.db_path, timeout=MAX_QUERY_TIMEOUT)
+            self.connection = sqlite3.connect(self.db_path, timeout=MAX_QUERY_TIMEOUT, check_same_thread=False)
             self.connection.row_factory = sqlite3.Row  # Access columns by name
             self.available = True
         except Exception as e:
