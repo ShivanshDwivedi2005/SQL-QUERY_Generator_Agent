@@ -2,7 +2,7 @@
  * API service for communicating with the backend
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = 'https://ai-sql-agent-4.onrender.com';
 
 export interface AskResponse {
   success: boolean;
