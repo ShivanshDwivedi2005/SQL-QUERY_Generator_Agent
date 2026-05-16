@@ -15,7 +15,7 @@ interface ResultTableProps {
   isExpensive?: boolean;
   databaseAvailable?: boolean;
   columns?: string[];
-  rows?: Record<string, any>[];
+  rows?: Record<string, unknown>[];
 }
 
 export function ResultTable({ sql, summary, isExpensive, databaseAvailable, columns = [], rows = [] }: ResultTableProps) {

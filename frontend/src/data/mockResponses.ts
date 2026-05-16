@@ -104,12 +104,12 @@ WHERE i.InvoiceId IS NULL;`,
   'What tables exist in this database?': {
     reasoning: [
       { id: '1', label: 'Intent Analysis', detail: 'Meta-query requesting schema introspection', status: 'complete' },
-      { id: '2', label: 'Strategy Selection', detail: 'Querying SQLite system catalog (sqlite_master)', status: 'complete' },
+      { id: '2', label: 'Strategy Selection', detail: 'Querying PostgreSQL information_schema tables', status: 'complete' },
     ],
-    sql: `SELECT name, type 
-FROM sqlite_master 
-WHERE type = 'table' 
-ORDER BY name;`,
+    sql: `SELECT table_name AS name, table_type AS type
+FROM information_schema.tables 
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+ORDER BY table_schema, table_name;`,
     result: {
       columns: ['name', 'type'],
       rows: [
@@ -126,7 +126,7 @@ ORDER BY name;`,
         { name: 'Track', type: 'table' },
       ],
     },
-    summary: 'The Chinook database contains 11 tables covering music catalog (Album, Artist, Track, Genre), sales (Invoice, InvoiceLine, Customer), and organization (Employee, Playlist).',
+    summary: 'The connected PostgreSQL database tables are listed from information_schema, excluding system schemas.',
     status: 'success',
   },
 };

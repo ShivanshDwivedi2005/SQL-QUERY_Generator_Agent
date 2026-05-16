@@ -17,14 +17,9 @@ const Index = () => {
   const hasResponse = response !== null;
   const [activeTab, setActiveTab] = useState('natural');
 
-  const handleDatabaseChange = () => {
-    // Reset query state when database changes
-    reset();
-  };
-
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <Header onDatabaseChange={handleDatabaseChange} />
+      <Header />
       
       <main className="flex-1 container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">

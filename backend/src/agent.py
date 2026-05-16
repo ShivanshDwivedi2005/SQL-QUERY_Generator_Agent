@@ -15,17 +15,16 @@ from src.display import (
 
 
 class SQLAgent:
-    """Intelligent agent that converts natural language to SQL with reasoning."""
+    """Intelligent agent that converts natural language to PostgreSQL with reasoning."""
     
     def __init__(self, db_path: Optional[str] = None):
         """Initialize the agent with database tools and LLM."""
-        # Configure Gemini
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY not set. Please set it in .env file or environment.")
+        self.llm_available = bool(GEMINI_API_KEY)
+        if self.llm_available:
+            genai.configure(api_key=GEMINI_API_KEY)
         
-        genai.configure(api_key=GEMINI_API_KEY)
-        
-        # Store database path
+        # Store database URL. The argument name stays db_path for backwards
+        # compatibility with older callers.
         self.db_path = db_path
         
         # Initialize database tools
@@ -34,13 +33,13 @@ class SQLAgent:
         
         # System prompt for the agent - adjust based on database availability
         if self.database_available:
-            self.system_prompt = """You are an expert SQL assistant that helps users query databases using natural language.
+            self.system_prompt = """You are an expert PostgreSQL assistant that helps users query a Neon PostgreSQL database using natural language.
 
 IMPORTANT - ALWAYS EXECUTE QUERIES:
 
 **For SQL/Data Requests:**
 1. Use get_schema_info() to understand database structure
-2. Generate the appropriate SQL query
+2. Generate the appropriate PostgreSQL query
 3. ALWAYS call execute_sql() to run the query and get results
 4. Return both the SQL and the actual data results
 
@@ -52,42 +51,42 @@ CRITICAL: When users ask for data, you MUST execute the SQL query and return act
 
 Your workflow for data queries:
 Step 1: get_schema_info() → understand tables/columns
-Step 2: Generate SQL query
+Step 2: Generate PostgreSQL query
 Step 3: execute_sql(query) → get actual data
 Step 4: Return results with the query
 
-Always execute queries to provide complete answers."""
+Use PostgreSQL syntax. Always execute queries to provide complete answers."""
         else:
-            self.system_prompt = """You are an expert SQL assistant. No database is connected, so you can only generate SQL queries.
+            self.system_prompt = """You are an expert PostgreSQL assistant. No Neon database is connected, so you can only generate SQL queries.
 
 **When user asks for SQL or data queries:**
-- Generate complete, executable SQL queries
+- Generate complete, executable PostgreSQL queries
 - Use standard table names (users, customers, orders, products, employees)
 - Use common columns (id, name, email, date, amount, status)
 - Include LIMIT clauses for safety
 - State your assumptions clearly
-- Note that the query cannot be executed without a database
+- Note that the query cannot be executed without a Neon/PostgreSQL DATABASE_URL
 
 **When user asks general questions:**
 - Answer directly without SQL
 - Be concise and clear
 
-Provide helpful SQL queries with clear assumptions about table structure."""
+Provide helpful PostgreSQL queries with clear assumptions about table structure."""
         
         # Define tools for function calling
         self.tools = self._define_tools()
         
-        # Initialize model with function calling
-        self.model = genai.GenerativeModel(
-            model_name=MODEL_NAME,
-            generation_config=genai.types.GenerationConfig(
-                temperature=TEMPERATURE,
-            ),
-            tools=self.tools if self.database_available else []
-        )
-        
-        # Start chat session
-        self.chat = self.model.start_chat(enable_automatic_function_calling=False)
+        self.model = None
+        self.chat = None
+        if self.llm_available:
+            self.model = genai.GenerativeModel(
+                model_name=MODEL_NAME,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=TEMPERATURE,
+                ),
+                tools=self.tools if self.database_available else []
+            )
+            self.chat = self.model.start_chat(enable_automatic_function_calling=False)
     def _define_tools(self) -> List[Dict]:
         """Define tool schemas for Gemini function calling."""
         return [
@@ -138,7 +137,7 @@ Provide helpful SQL queries with clear assumptions about table structure."""
                     ),
                     genai.protos.FunctionDeclaration(
                         name="execute_sql",
-                        description="Execute a SQL query and return results. Only use this after you have explored the schema and are confident in your SQL. The query will be validated for safety before execution.",
+                        description="Execute a PostgreSQL query and return results. Only use this after you have explored the schema and are confident in your SQL. The query will be validated for safety before execution.",
                         parameters=genai.protos.Schema(
                             type=genai.protos.Type.OBJECT,
                             properties={
@@ -221,6 +220,23 @@ Provide helpful SQL queries with clear assumptions about table structure."""
             Dictionary with results and metadata
         """
         reasoning = ReasoningTrace()
+
+        if not self.llm_available or self.chat is None:
+            return {
+                "success": False,
+                "question": question,
+                "summary": "Gemini is not configured. Add GEMINI_API_KEY to backend/.env to use natural language queries.",
+                "reasoning": [],
+                "sql": "",
+                "result": {
+                    "columns": [],
+                    "rows": []
+                },
+                "status": "error",
+                "error": "GEMINI_API_KEY is not configured",
+                "databaseAvailable": self.database_available,
+                "isSqlRequest": self._is_sql_request(question)
+            }
         
         # Check if user is asking for SQL
         is_sql_request = self._is_sql_request(question)
@@ -472,7 +488,8 @@ Provide helpful SQL queries with clear assumptions about table structure."""
     
     def reset_chat(self):
         """Reset the chat session."""
-        self.chat = self.model.start_chat(enable_automatic_function_calling=False)
+        if self.model:
+            self.chat = self.model.start_chat(enable_automatic_function_calling=False)
     
     def close(self):
         """Clean up resources."""

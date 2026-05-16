@@ -1,6 +1,12 @@
 import { useState, useCallback } from 'react';
 import { QueryStatus, QueryResponse } from '@/types/query';
-import { askQuestion, AskResponse } from '@/services/api';
+import { askQuestion } from '@/services/api';
+
+type ApiReasoningStep = {
+  step?: string;
+  label?: string;
+  detail?: string;
+};
 
 export function useQuerySimulation() {
   const [status, setStatus] = useState<QueryStatus>('idle');
@@ -83,7 +89,7 @@ export function useQuerySimulation() {
 
       // Transform API response to match frontend QueryResponse format
       const reasoning = Array.isArray(apiResponse.reasoning) 
-        ? apiResponse.reasoning.map((step: any, index: number) => ({
+        ? apiResponse.reasoning.map((step: ApiReasoningStep, index: number) => ({
             id: `step-${index}`,
             label: step.label || step.step || `Step ${index + 1}`,
             detail: step.detail || '',

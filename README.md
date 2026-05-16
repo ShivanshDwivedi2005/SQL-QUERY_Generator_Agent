@@ -1,6 +1,6 @@
 # AI-SQL-Agent
 
-AI-SQL-Agent is a project that helps generate, validate, and run SQL queries using AI-assisted tools. This repository contains a mix of TypeScript and Python code to provide an interactive agent, utilities, and integrations for working with SQL databases.
+AI-SQL-Agent is a project that helps generate, validate, and run PostgreSQL queries using AI-assisted tools. This repository contains a React frontend and Python/FastAPI backend for asking questions against a Neon PostgreSQL database.
 
 ## Languages
 - React + Typescript
@@ -9,7 +9,7 @@ AI-SQL-Agent is a project that helps generate, validate, and run SQL queries usi
 ## Features
 - Use AI to translate natural-language questions into SQL queries
 - Validate and explain generated SQL
-- Run queries against a connected database safely (with configuration)
+- Run read-only queries against a connected Neon PostgreSQL database
 - Modular codebase with TypeScript frontend/agent logic and Python utilities/scripts
 
 ---
@@ -38,22 +38,32 @@ npm install
 pnpm install
 ```
 
-3. Set up Python environment (optional — for Python utilities)
+3. Set up Python environment
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # on macOS/Linux
 .\.venv\Scripts\activate   # on Windows
+cd backend
 pip install -r requirements.txt
 ```
 
 4. Configuration
 
-Create a .env file at the repository root and add the required environment variables. Example:
+Create a `.env` file in `backend/` and add the required environment variables. Example:
 
 ```
 # .env
-OPENAI_API_KEY=sk-xxx
+GEMINI_API_KEY=your_gemini_key
+DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
+```
+
+You can also use `NEON_DATABASE_URL` instead of `DATABASE_URL`.
+
+Create a `.env` file in `frontend/`:
+
+```
+VITE_API_URL=http://localhost:8000
 ```
 
 5. Run the project
@@ -61,9 +71,12 @@ OPENAI_API_KEY=sk-xxx
 The repository contains both TypeScript and Python parts. Typical commands (adjust to your project scripts):
 
 ```bash
-# Build and run TypeScript app
-npm run build
-npm start
-# or for development
+# backend
+cd backend
+uvicorn apis:app --reload --port 8000
+
+# frontend
+cd frontend
+npm install
 npm run dev
 ```

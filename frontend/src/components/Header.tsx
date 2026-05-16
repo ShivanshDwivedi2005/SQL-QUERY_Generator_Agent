@@ -1,11 +1,7 @@
 import { Database, Sparkles } from 'lucide-react';
 import { DatabaseManager } from './DatabaseManager';
 
-interface HeaderProps {
-  onDatabaseChange?: () => void;
-}
-
-export function Header({ onDatabaseChange }: HeaderProps) {
+export function Header() {
   return (
     <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
@@ -28,7 +24,7 @@ export function Header({ onDatabaseChange }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          <DatabaseManager onDatabaseChange={onDatabaseChange} />
+          <DatabaseManager />
         </div>
       </div>
     </header>

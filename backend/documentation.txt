@@ -1,0 +1,1132 @@
+AI SQL Agent - Complete Project Documentation
+=============================================
+
+1. Project Overview
+-------------------
+
+This project is a full-stack "Ask your database" application.
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- shadcn/Radix UI components
+
+Backend:
+- Python
+- FastAPI
+- Google Gemini API
+- Neon PostgreSQL
+- psycopg PostgreSQL driver
+
+Main purpose:
+The user asks a natural-language question like "show all customers from India".
+The frontend sends that question to the backend.
+The backend asks Gemini to understand the question, inspect the PostgreSQL schema, generate a safe SQL query, execute it on Neon PostgreSQL, and return the SQL plus table results.
+
+The project now uses Neon PostgreSQL, not SQLite.
+
+
+2. Main Folder Structure
+------------------------
+
+Main repository folder:
+
+SQL-QUERY_Generator_Agent/
+
+Important files and folders:
+
+README.md
+- Short setup and project overview.
+
+backend/
+- Python FastAPI backend.
+- Contains the API server, Gemini agent, PostgreSQL tools, CLI scripts, setup scripts, and backend .env file.
+
+frontend/
+- React frontend.
+- Contains the user interface, API client, components, pages, styles, and TypeScript config.
+
+backend/venv/
+- Local Python virtual environment.
+- Generated dependency folder.
+- Not part of source code.
+
+frontend/node_modules/
+- Local Node dependency folder.
+- Generated dependency folder.
+- Not part of source code.
+
+
+3. Important Environment Variables
+----------------------------------
+
+Backend environment file:
+
+backend/.env
+
+Expected variables:
+
+GEMINI_API_KEY=your_gemini_key
+DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
+
+Alternative database variable:
+
+NEON_DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
+
+The backend code checks DATABASE_URL first, then NEON_DATABASE_URL.
+
+Frontend environment file:
+
+frontend/.env
+
+Expected variable:
+
+VITE_API_URL=http://localhost:8000
+
+This tells the React app where the FastAPI backend is running.
+
+
+4. How To Run The Project
+-------------------------
+
+Run backend:
+
+cd backend
+.\venv\Scripts\python.exe -m uvicorn apis:app --reload --port 8000
+
+Or, if your environment already points to the correct Python:
+
+uvicorn apis:app --reload --port 8000
+
+Important:
+Run apis:app, not server:app.
+
+server.py is the older minimal backend. It only exposes two routes and is not the current app backend.
+
+Run frontend:
+
+cd frontend
+npm install
+npm run dev
+
+Then open the Vite dev URL, usually:
+
+http://localhost:8080
+
+FastAPI documentation:
+
+http://localhost:8000/docs
+
+Backend health check:
+
+http://localhost:8000/health
+
+
+5. Backend Entry Points
+-----------------------
+
+backend/apis.py
+Main current FastAPI backend.
+
+This is the file you should run with Uvicorn:
+
+uvicorn apis:app --reload --port 8000
+
+Responsibilities:
+- Loads backend/.env using load_dotenv(override=True).
+- Creates the FastAPI app.
+- Configures CORS so the frontend can call the API.
+- Initializes SQLAgent on startup.
+- Connects to Neon PostgreSQL through SQLAgent and DatabaseTools.
+- Exposes API routes used by the frontend.
+- Validates raw SQL before execution.
+- Returns schema information for the frontend database viewer.
+
+backend/server.py
+Older minimal API.
+
+Routes:
+- GET /
+- POST /query
+
+This file is not the main backend anymore. If you run uvicorn server:app --reload, you will only see the old two APIs.
+
+backend/main.py
+CLI version of the project.
+
+It lets you ask questions from the terminal instead of the browser.
+
+Run from backend:
+
+python main.py
+
+It uses the same SQLAgent class as the API backend.
+
+
+6. Backend API Routes
+---------------------
+
+Defined in backend/apis.py.
+
+GET /health
+- Returns backend status.
+- Shows whether the agent is initialized.
+- Shows whether the Neon/PostgreSQL database is connected.
+- Useful first check while debugging.
+
+Example response:
+
+{
+  "status": "healthy",
+  "agent_initialized": true,
+  "database_available": true,
+  "database_provider": "neon"
+}
+
+GET /databases
+- Returns the configured Neon database information.
+- The app now uses one configured DATABASE_URL instead of multiple uploaded databases.
+
+Example response:
+
+{
+  "databases": ["neondb"],
+  "current": "neondb",
+  "provider": "neon",
+  "connected": true
+}
+
+POST /ask
+- Main natural-language endpoint.
+- Frontend sends the user's natural language question here.
+- Backend passes the question to SQLAgent.
+- SQLAgent may call schema tools, generate SQL, execute SQL, and return results.
+
+Request body:
+
+{
+  "question": "show all customers",
+  "show_reasoning": true
+}
+
+POST /execute-sql
+- Used by the SQL Editor tab in the frontend.
+- Takes raw SQL from the user.
+- Validates it first.
+- Allows only read-only SELECT/WITH queries.
+- Executes it on Neon PostgreSQL.
+
+Request body:
+
+{
+  "question": "SELECT * FROM customers LIMIT 10"
+}
+
+GET /database/view
+- Used by the "View Database" button in the frontend header.
+- Returns all user tables, columns, constraints, row counts, and sample rows.
+- Reads PostgreSQL metadata through information_schema.
+
+POST /upload-data
+- Used by the "Upload Data" button in the frontend header.
+- Accepts CSV files only.
+- Rejects files larger than 5 MB.
+- Imports the CSV as a new PostgreSQL table in Neon.
+- Uses the CSV filename as the base table name.
+- Sanitizes table and column names into PostgreSQL-safe identifiers.
+- Stores uploaded columns as TEXT.
+- If a table name already exists, creates a unique suffixed table name.
+
+POST /upload-database
+- Kept only for compatibility.
+- Returns an error because SQLite file upload is no longer supported.
+
+POST /databases/{db_name}/select
+- Kept only for compatibility.
+- Returns an error because runtime database switching is disabled.
+- To change database, update DATABASE_URL in backend/.env.
+
+
+7. Backend Configuration
+------------------------
+
+backend/config.py
+
+Important values:
+
+GEMINI_API_KEY
+- Loaded from environment.
+- Required for natural-language queries.
+- If missing, SQL editor and database viewer can still work, but /ask will return an error.
+
+DATABASE_URL
+- Loaded from DATABASE_URL or NEON_DATABASE_URL.
+- Required for Neon PostgreSQL connection.
+
+DATABASE_NAME
+- Display fallback name.
+- Defaults to "Neon PostgreSQL".
+
+MODEL_NAME
+- Current value: gemini-2.5-flash-lite
+- Gemini model used by SQLAgent.
+
+TEMPERATURE
+- Current value: 0.1
+- Low value makes generated SQL more consistent.
+
+MAX_QUERY_TIMEOUT
+- Query timeout in seconds.
+
+DEFAULT_LIMIT
+- Default LIMIT added to queries that do not already have one, unless the query is an aggregation like COUNT/SUM/AVG.
+
+MAX_UPLOAD_SIZE_BYTES
+- Current value: 5 * 1024 * 1024.
+- Maximum CSV upload size.
+- Larger files return "Data size is larger than 5 MB".
+
+BLOCKED_KEYWORDS
+- Prevents destructive or unsafe SQL operations.
+- Includes INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, VACUUM, CALL, DO, COPY.
+
+
+8. SQLAgent
+-----------
+
+File:
+
+backend/src/agent.py
+
+Main class:
+
+SQLAgent
+
+Main method:
+
+process_question(question, show_reasoning=True)
+
+What SQLAgent does:
+
+1. Reads Gemini settings from config.py.
+2. Creates DatabaseTools.
+3. Checks whether Neon/PostgreSQL is connected.
+4. Builds a system prompt for Gemini.
+5. Defines function-calling tools for Gemini:
+   - get_schema_info
+   - explore_data
+   - get_table_stats
+   - execute_sql
+6. Receives a natural-language question.
+7. Decides whether the question looks like a SQL/data request.
+8. Sends the question to Gemini.
+9. If Gemini calls a tool, SQLAgent executes that tool locally.
+10. Sends the tool result back to Gemini.
+11. Repeats until Gemini returns a final text response.
+12. Returns a normalized response to the frontend.
+
+The agent supports two modes:
+
+Database connected:
+- Gemini can inspect schema.
+- Gemini can generate PostgreSQL.
+- Backend validates and executes the SQL.
+- User receives real data.
+
+Database not connected:
+- Gemini can still generate SQL based on assumptions.
+- Queries cannot be executed.
+- Frontend shows databaseAvailable=false.
+
+Gemini key missing:
+- SQLAgent still initializes database tools.
+- /ask returns a clear error saying GEMINI_API_KEY is missing.
+- SQL editor and database viewer can still be used if DATABASE_URL works.
+
+
+9. Gemini Tool Calling
+----------------------
+
+SQLAgent exposes these tools to Gemini.
+
+get_schema_info(table_name=None)
+- If table_name is empty, returns all user tables.
+- If table_name is provided, returns columns, types, primary keys, defaults, and foreign keys.
+
+explore_data(table_name, column_name=None, sample_size=5)
+- If column_name is empty, returns sample rows.
+- If column_name is provided, returns distinct count, non-null count, total count, and sample values.
+
+get_table_stats()
+- Returns row count for every user table.
+
+execute_sql(sql)
+- Validates the SQL first.
+- Runs the SQL in a read-only PostgreSQL transaction.
+- Returns columns, rows, row_count, and execution_time.
+
+
+10. DatabaseTools
+-----------------
+
+File:
+
+backend/src/tools.py
+
+Main class:
+
+DatabaseTools
+
+This is the database access layer.
+
+It now uses:
+
+psycopg
+
+not sqlite3.
+
+Important methods:
+
+_connect()
+- Connects to Neon PostgreSQL using DATABASE_URL.
+- Sets statement_timeout safely using set_config.
+- Stores current database name.
+- Sets available=True if connection succeeds.
+- Stores connection_error if connection fails.
+
+get_schema_info(table_name=None)
+- Reads metadata from information_schema.tables, information_schema.columns, and constraint metadata.
+- Excludes pg_catalog and information_schema system schemas.
+
+explore_data(table_name, column_name=None, sample_size=5)
+- Safely quotes identifiers.
+- Returns sample rows or column stats.
+
+get_table_stats()
+- Counts rows for every user table.
+
+validate_sql(sql)
+- Blocks multiple statements.
+- Blocks dangerous keywords.
+- Allows only SELECT and WITH.
+- Adds LIMIT 100 to non-aggregate queries without LIMIT.
+
+execute_sql(sql)
+- Starts a read-only transaction.
+- Executes SQL.
+- Converts rows to JSON-friendly dictionaries.
+- Converts Decimal/date/datetime/time values into frontend-safe values.
+
+get_database_view()
+- Builds the structure shown by the frontend "View Database" dialog.
+- Returns database name, dialect, tables, columns, row counts, and sample rows.
+
+upload_csv_data(filename, content)
+- Creates a new PostgreSQL table from uploaded CSV data.
+- Requires a header row.
+- Converts the filename into a safe table name.
+- Converts headers into safe unique column names.
+- Stores every uploaded column as TEXT.
+- Inserts all CSV rows into the new table.
+
+close()
+- Closes the PostgreSQL connection.
+
+
+11. SQL Safety Rules
+--------------------
+
+The app is designed for read-only querying.
+
+Allowed:
+- SELECT ...
+- WITH ... SELECT ...
+
+Blocked:
+- INSERT
+- UPDATE
+- DELETE
+- DROP
+- ALTER
+- CREATE
+- TRUNCATE
+- GRANT
+- REVOKE
+- VACUUM
+- CALL
+- DO
+- COPY
+
+Also blocked:
+- Multiple SQL statements in one input.
+
+Important:
+Raw SQL from the SQL editor now goes through validate_sql before execution.
+
+
+12. Display Utilities
+---------------------
+
+File:
+
+backend/src/display.py
+
+Used mostly by the CLI mode, not the React UI.
+
+Provides:
+- Rich console output.
+- Reasoning trace display.
+- SQL syntax display.
+- Query result table display.
+- Error formatting.
+- Welcome message.
+
+Important class:
+
+ReasoningTrace
+
+It stores and prints reasoning/tool steps for terminal usage.
+
+
+13. Setup and Test Scripts
+--------------------------
+
+backend/setup.py
+- Helper script for creating backend/.env.
+- Asks for Gemini API key.
+- Asks for Neon DATABASE_URL.
+- Prints next steps.
+
+backend/test_setup.py
+- Checks Python packages.
+- Checks backend/.env.
+- Checks GEMINI_API_KEY.
+- Checks DATABASE_URL or NEON_DATABASE_URL.
+- Attempts a real psycopg connection to Neon.
+
+Run from backend:
+
+python test_setup.py
+
+
+14. Backend Dependencies
+------------------------
+
+File:
+
+backend/requirements.txt
+
+Important packages:
+
+fastapi
+- API framework.
+
+uvicorn
+- ASGI server used to run FastAPI.
+
+python-dotenv
+- Loads backend/.env.
+
+google-generativeai
+- Gemini SDK.
+
+psycopg[binary]
+- PostgreSQL driver used for Neon.
+
+sqlparse
+- Parses SQL during validation.
+
+rich
+- Pretty terminal output for CLI.
+
+pandas/numpy
+- Present in requirements, though not central to the current API flow.
+
+
+15. Frontend Entry Points
+-------------------------
+
+frontend/src/main.tsx
+- React root entry.
+- Mounts App into index.html.
+
+frontend/src/App.tsx
+- Sets up:
+  - React Query provider
+  - Tooltip provider
+  - Toast providers
+  - BrowserRouter
+  - Routes
+
+Routes:
+- / -> Index page
+- * -> NotFound page
+
+frontend/src/pages/Index.tsx
+- Main application page.
+- Renders header.
+- Renders two tabs:
+  - Natural Language
+  - SQL Editor
+- Coordinates query input, loading state, result display, and SQL editor.
+
+
+16. Frontend Natural Language Flow
+----------------------------------
+
+Files involved:
+
+frontend/src/pages/Index.tsx
+frontend/src/components/QueryInput.tsx
+frontend/src/hooks/useQuerySimulation.ts
+frontend/src/services/api.ts
+frontend/src/components/StatusBanner.tsx
+frontend/src/components/ReasoningPanel.tsx
+frontend/src/components/ResultTable.tsx
+frontend/src/components/SQLViewer.tsx
+
+Flow:
+
+1. User types a question in QueryInput.
+2. QueryInput calls onSubmit.
+3. Index passes runQuery from useQuerySimulation as onSubmit.
+4. useQuerySimulation sets status to "thinking".
+5. useQuerySimulation calls askQuestion from services/api.ts.
+6. askQuestion sends POST /ask to FastAPI.
+7. FastAPI calls SQLAgent.process_question.
+8. Backend returns success/error, SQL, summary, rows, columns.
+9. useQuerySimulation transforms backend response into QueryResponse.
+10. Index renders StatusBanner and ResultTable.
+
+
+17. Frontend SQL Editor Flow
+----------------------------
+
+Files involved:
+
+frontend/src/components/SQLEditor.tsx
+frontend/src/services/api.ts
+frontend/src/components/ResultTable.tsx
+frontend/src/components/SQLViewer.tsx
+
+Flow:
+
+1. User types SQL in SQL Editor tab.
+2. User clicks Execute Query or presses Ctrl+Enter.
+3. SQLEditor calls executeRawSQL from services/api.ts.
+4. executeRawSQL sends POST /execute-sql.
+5. Backend validates SQL.
+6. Backend executes SQL on Neon PostgreSQL if valid.
+7. Frontend displays SQL and result rows.
+
+
+18. Frontend Database Viewer Flow
+---------------------------------
+
+File:
+
+frontend/src/components/DatabaseManager.tsx
+
+Shown in the header through Header.tsx.
+
+What it does:
+- Calls GET /databases to show connection status.
+- Shows the current Neon database name.
+- Shows connected/not connected icon.
+- Has Refresh button.
+- Has View Database button.
+- Has Upload Data button for CSV uploads.
+- Checks file type and 5 MB file size before upload.
+- View Database calls GET /database/view.
+- Upload Data calls POST /upload-data.
+- Displays tables in an accordion.
+- Shows columns, types, constraints, row count, and sample data.
+
+Important:
+There is no SQLite database upload UI anymore.
+The upload feature imports CSV data into the connected Neon PostgreSQL database.
+There is no database select dropdown anymore.
+Neon database is selected by DATABASE_URL in backend/.env.
+
+
+19. Frontend API Client
+-----------------------
+
+File:
+
+frontend/src/services/api.ts
+
+Uses:
+
+const API_BASE_URL = import.meta.env.VITE_API_URL;
+
+Functions:
+
+askQuestion(question, showReasoning=true)
+- POST /ask
+
+listDatabases()
+- GET /databases
+
+viewDatabase()
+- GET /database/view
+
+uploadData(file)
+- POST /upload-data
+- Uploads a CSV file into Neon PostgreSQL.
+- Frontend rejects files over 5 MB before sending.
+
+executeRawSQL(sqlQuery)
+- POST /execute-sql
+
+Important TypeScript interfaces:
+
+AskResponse
+DatabaseInfo
+DatabaseColumn
+DatabaseTable
+DatabaseView
+UploadDataResponse
+ExecuteSQLResponse
+
+
+20. Frontend Types
+------------------
+
+File:
+
+frontend/src/types/query.ts
+
+Important types:
+
+QueryStatus
+- idle
+- thinking
+- exploring
+- generating
+- executing
+- success
+- empty
+- error
+- ambiguous
+
+QueryResponse
+- reasoning
+- sql
+- result
+- summary
+- status
+- clarification
+- error
+- databaseAvailable
+- isSqlRequest
+- showReasoningTrace
+- showResult
+
+QueryResult
+- columns
+- rows
+
+ExampleQuery
+- label
+- query
+- category
+
+
+21. Important Frontend Components
+---------------------------------
+
+Header.tsx
+- Top app header.
+- Shows app title.
+- Includes DatabaseManager.
+
+DatabaseManager.tsx
+- Shows Neon connection status.
+- Refreshes connection information.
+- Opens database structure dialog.
+
+QueryInput.tsx
+- Textarea for natural-language question.
+- Submit button.
+- Example query chips.
+
+LoadingState.tsx
+- Displays loading progress UI.
+- Status steps exist for thinking, exploring, generating, executing.
+- Current backend call is one request, so the UI mostly uses "thinking" unless expanded later.
+
+StatusBanner.tsx
+- Shows success, empty result, ambiguity, or error state.
+
+ReasoningPanel.tsx
+- Shows a compact two-point explanation for non-database or general answers.
+
+ResultTable.tsx
+- Displays generated SQL.
+- Displays result count.
+- Displays result rows in a table.
+- Can also display paragraph-style answer when no SQL is returned.
+
+SQLViewer.tsx
+- Displays SQL with simple syntax highlighting.
+- Has copy button.
+
+SQLEditor.tsx
+- Raw SQL editor tab.
+- Sends SQL to backend /execute-sql.
+
+EmptyState.tsx
+- Initial empty state before user asks a question.
+
+NotFound.tsx
+- Catch-all route page.
+
+
+22. Styling and UI System
+-------------------------
+
+frontend/src/index.css
+- Global Tailwind styles.
+- CSS variables for theme colors.
+- Dark UI theme.
+- Custom utility classes like glow-primary, animate-fade-in, animate-slide-up.
+
+frontend/tailwind.config.ts
+- Tailwind config.
+- Theme colors map to CSS variables.
+- Includes tailwindcss-animate plugin.
+
+frontend/src/components/ui/
+- shadcn/Radix UI reusable components.
+- Most are generic UI building blocks.
+
+
+23. Mock Data
+-------------
+
+File:
+
+frontend/src/data/mockResponses.ts
+
+Current use:
+- Provides example query chips in QueryInput.
+- Contains older mock responses for demo/reference.
+
+Important:
+The real app does not use mock responses for actual queries.
+Actual query responses come from the backend.
+
+
+24. Current Data Model Assumption
+---------------------------------
+
+The app does not hard-code a specific table model.
+
+Instead:
+- It connects to whatever Neon PostgreSQL database DATABASE_URL points to.
+- It asks information_schema for tables and columns.
+- Gemini uses that schema to decide what SQL to generate.
+
+If /database/view returns no tables:
+- The database connection works.
+- But the connected database has no user tables in visible schemas.
+- Or your tables are not in a schema currently included by the app.
+
+Current schema scan excludes:
+- pg_catalog
+- information_schema
+
+It includes:
+- public
+- other non-system schemas
+
+Table names outside public are returned as:
+
+schema_name.table_name
+
+
+25. Common Problems and Fixes
+-----------------------------
+
+Problem:
+Only two APIs show in FastAPI docs.
+
+Cause:
+You ran:
+
+uvicorn server:app --reload
+
+Fix:
+Run:
+
+uvicorn apis:app --reload --port 8000
+
+
+Problem:
+GET / returns 404.
+
+Cause:
+apis.py does not define a root / route.
+
+Fix:
+Use:
+
+http://localhost:8000/docs
+http://localhost:8000/health
+
+
+Problem:
+Database not connected. Running in fallback SQL-generation mode.
+
+Possible causes:
+- DATABASE_URL missing from backend/.env.
+- You are running Uvicorn from the wrong folder.
+- psycopg is not installed.
+- Neon URL is invalid.
+- Network cannot reach Neon.
+- Database server is paused/unavailable.
+
+Useful checks:
+
+cd backend
+python test_setup.py
+
+or:
+
+.\venv\Scripts\python.exe -c "from dotenv import load_dotenv; load_dotenv(override=True); from src.tools import DatabaseTools; db=DatabaseTools(); print(db.available, db.database_name, db.connection_error)"
+
+
+Problem:
+Database connects but /database/view shows zero tables.
+
+Cause:
+The connected Neon database currently has no user tables, or your tables are in a schema not expected by your prompt/data.
+
+Fix:
+Create/import tables in Neon, then click Refresh/View Database again.
+
+
+Problem:
+Upload Data says "Data size is larger than 5 MB".
+
+Cause:
+The selected CSV file is above the allowed size.
+
+Fix:
+Use a smaller CSV file, split the data, or increase MAX_UPLOAD_SIZE_BYTES in backend/config.py and frontend/src/services/api.ts.
+
+
+Problem:
+Upload Data says "Only CSV files are supported".
+
+Cause:
+The current upload feature imports CSV files only.
+
+Fix:
+Export your data as .csv before uploading.
+
+
+Problem:
+Frontend cannot call backend.
+
+Check frontend/.env:
+
+VITE_API_URL=http://localhost:8000
+
+Restart frontend after changing .env.
+
+
+Problem:
+Natural-language query fails but SQL editor works.
+
+Cause:
+DATABASE_URL may be fine, but GEMINI_API_KEY is missing or invalid.
+
+Fix:
+Add valid GEMINI_API_KEY to backend/.env and restart backend.
+
+
+Problem:
+Build/test fails with esbuild spawn EPERM.
+
+Cause:
+Windows/security/permission issue launching esbuild from node_modules.
+
+What was observed:
+- TypeScript check passed.
+- ESLint ran.
+- Vite build/test failed because esbuild process spawn was blocked.
+
+Possible fixes:
+- Restart terminal as normal user or administrator.
+- Reinstall node_modules.
+- Ensure antivirus/Windows security is not blocking esbuild.
+- Move project out of OneDrive if file locking continues.
+
+
+26. Validation Commands
+-----------------------
+
+Backend syntax check:
+
+python -c "import ast, pathlib; files=['backend/apis.py','backend/config.py','backend/main.py','backend/setup.py','backend/test_setup.py','backend/src/agent.py','backend/src/tools.py']; [ast.parse(pathlib.Path(f).read_text(encoding='utf-8'), filename=f) for f in files]; print('python syntax ok')"
+
+Backend PostgreSQL import check:
+
+cd backend
+.\venv\Scripts\python.exe -c "import psycopg; from src.tools import DatabaseTools; print('backend postgres imports ok')"
+
+Backend connection check:
+
+cd backend
+.\venv\Scripts\python.exe -c "from dotenv import load_dotenv; load_dotenv(override=True); from src.tools import DatabaseTools; db=DatabaseTools(); print('available', db.available, 'name', db.database_name, 'error', db.connection_error); db.close()"
+
+Frontend TypeScript check:
+
+cd frontend
+npx tsc -b
+
+Frontend lint:
+
+cd frontend
+npm run lint
+
+Frontend tests:
+
+cd frontend
+npm run test
+
+Frontend build:
+
+cd frontend
+npm run build
+
+
+27. How To Add Features
+-----------------------
+
+Add a new backend route:
+1. Open backend/apis.py.
+2. Add a FastAPI route.
+3. Add any request/response Pydantic models.
+4. If frontend needs it, add a function in frontend/src/services/api.ts.
+5. Use that function from a component or hook.
+
+Add a new database tool for Gemini:
+1. Open backend/src/tools.py.
+2. Add a method to DatabaseTools.
+3. Open backend/src/agent.py.
+4. Add the function declaration in _define_tools.
+5. Add execution logic in _execute_tool.
+6. Mention tool usage in the system prompt if needed.
+
+Change SQL validation rules:
+1. Open backend/config.py for blocked keywords/default limit.
+2. Open backend/src/tools.py.
+3. Edit validate_sql.
+
+Change frontend result display:
+1. Open frontend/src/components/ResultTable.tsx.
+2. Open frontend/src/components/SQLViewer.tsx if SQL display changes.
+
+Change natural language request behavior:
+1. Open frontend/src/hooks/useQuerySimulation.ts.
+2. Open backend/src/agent.py.
+
+
+28. Current Git/Workspace Notes
+-------------------------------
+
+The project has recently been migrated from SQLite to Neon PostgreSQL.
+
+Files changed for the migration include:
+- README.md
+- backend/.gitignore
+- backend/apis.py
+- backend/config.py
+- backend/main.py
+- backend/requirements.txt
+- backend/setup.py
+- backend/src/agent.py
+- backend/src/tools.py
+- backend/test_setup.py
+- frontend/src/components/DatabaseManager.tsx
+- frontend/src/components/ResultTable.tsx
+- frontend/src/components/ui/command.tsx
+- frontend/src/components/ui/textarea.tsx
+- frontend/src/data/mockResponses.ts
+- frontend/src/hooks/useQuerySimulation.ts
+- frontend/src/services/api.ts
+- frontend/tailwind.config.ts
+- backend/documentation.txt
+
+backend/documentation.txt is intended to be the detailed project guide.
+
+
+29. Mental Model Of The Whole App
+---------------------------------
+
+Think of the project as four layers:
+
+Layer 1: Frontend UI
+- User types a question or SQL.
+- User views results.
+- User views database schema.
+
+Layer 2: Frontend API client
+- Converts UI actions into HTTP calls.
+- Lives in frontend/src/services/api.ts.
+
+Layer 3: FastAPI backend
+- Receives HTTP requests.
+- Owns app startup/shutdown.
+- Calls SQLAgent and DatabaseTools.
+- Lives mainly in backend/apis.py.
+
+Layer 4: Intelligence and database
+- SQLAgent talks to Gemini.
+- DatabaseTools talks to Neon PostgreSQL.
+- SQLAgent coordinates tool calls.
+- DatabaseTools enforces read-only database safety.
+
+In one sentence:
+React collects the user's question, FastAPI passes it to SQLAgent, Gemini decides what PostgreSQL to run, DatabaseTools safely executes it on Neon, and React displays the returned SQL and rows.
+
+
+30. Quick Start Checklist
+-------------------------
+
+1. Open backend/.env.
+2. Confirm:
+
+GEMINI_API_KEY=...
+DATABASE_URL=...
+
+3. Test backend connection:
+
+cd backend
+.\venv\Scripts\python.exe -c "from dotenv import load_dotenv; load_dotenv(override=True); from src.tools import DatabaseTools; db=DatabaseTools(); print(db.available, db.database_name, db.connection_error)"
+
+4. Start backend:
+
+.\venv\Scripts\python.exe -m uvicorn apis:app --reload --port 8000
+
+5. Open:
+
+http://localhost:8000/docs
+
+6. Start frontend:
+
+cd frontend
+npm run dev
+
+7. Open frontend in browser.
+
+8. Click Refresh in header.
+
+9. Click View Database.
+
+10. Ask a natural-language question or use SQL Editor.

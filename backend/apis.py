@@ -1,313 +1,232 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
-import shutil
 from dotenv import load_dotenv
-from pathlib import Path
-import uvicorn
+import os
 
-load_dotenv()
+load_dotenv(override=True)
 
+from config import DATABASE_NAME, DATABASE_URL, MAX_UPLOAD_SIZE_BYTES
 from src.agent import SQLAgent
-from config import DATABASE_PATH
 
 app = FastAPI(title="AI SQL Agent API", version="1.0.0")
 
-# Configure CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Vite default ports
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Directory to store uploaded databases
-UPLOADED_DB_DIR = Path(__file__).parent / "uploaded_dbs"
-UPLOADED_DB_DIR.mkdir(exist_ok=True)
 
 class QuestionRequest(BaseModel):
     question: str
     show_reasoning: bool = True
 
+
 class DatabaseInfo(BaseModel):
     databases: list[str]
     current: str | None
+    provider: str = "neon"
+    connected: bool = False
 
-# Global variable to track current database
-app.state.current_db = None
+
 app.state.agent = None
+
+
+def _sync_database_status() -> tuple[bool, str | None, str | None]:
+    """Refresh connection state and return (connected, database_name, connection_error)."""
+    agent = getattr(app.state, "agent", None)
+    if not agent:
+        return False, None, None
+
+    if DATABASE_URL:
+        agent.db_tools.ensure_connected()
+        agent.database_available = agent.db_tools.available
+
+    connected = bool(agent.database_available)
+    database_name = agent.db_tools.database_name if connected else DATABASE_NAME
+    connection_error = None if connected else agent.db_tools.connection_error
+    return connected, database_name, connection_error
+
 
 @app.on_event("startup")
 async def startup():
-    """Initialize agent on startup."""
+    """Initialize the agent and Neon/PostgreSQL connection."""
     if not os.getenv("GEMINI_API_KEY"):
-        print("⚠ WARNING: GEMINI_API_KEY not set. Set it in .env file.")
-        print("  Get your key from: https://aistudio.google.com/app/apikey")
-        # Don't raise error, allow server to start
-    
-    # Use default database path if none specified
-    db_path = app.state.current_db if hasattr(app.state, 'current_db') and app.state.current_db else str(DATABASE_PATH)
-    
+        print("WARNING: GEMINI_API_KEY not set. Set it in .env file.")
+        print("Get your key from: https://aistudio.google.com/app/apikey")
+
+    if not DATABASE_URL:
+        print("WARNING: DATABASE_URL/NEON_DATABASE_URL not set.")
+        print("The app will run in SQL-generation-only mode until Neon is configured.")
+
     try:
-        # Initialize agent
-        app.state.agent = SQLAgent(db_path=db_path)
-        
-        # Log database status
+        app.state.agent = SQLAgent(db_path=DATABASE_URL)
         if app.state.agent.database_available:
-            print(f"✓ Database available: {db_path}")
+            print(f"Database available: {app.state.agent.db_tools.database_name}")
         else:
-            print(f"⚠ Database not found: {db_path}")
-            print("  Running in fallback mode (API-based SQL generation)")
+            print("Database not connected. Running in fallback SQL-generation mode.")
+            if app.state.agent.db_tools.connection_error:
+                print(f"Database connection error: {app.state.agent.db_tools.connection_error}")
     except Exception as e:
-        print(f"⚠ Error initializing agent: {e}")
-        # Create a basic agent anyway
+        print(f"Error initializing agent: {e}")
         app.state.agent = None
+
 
 @app.on_event("shutdown")
 async def shutdown():
     """Close agent on shutdown."""
-    if hasattr(app.state, 'agent') and app.state.agent:
+    if hasattr(app.state, "agent") and app.state.agent:
         app.state.agent.close()
+
 
 @app.get("/databases", response_model=DatabaseInfo)
 def list_databases():
-    """List available databases and current selection."""
-    # Get uploaded databases
-    uploaded_dbs = []
-    if UPLOADED_DB_DIR.exists():
-        uploaded_dbs = [f.stem for f in UPLOADED_DB_DIR.glob("*.db") if f.name != ".gitkeep"]
-    
-    # Include default database if it exists
-    default_name = "default"
-    if Path(DATABASE_PATH).exists():
-        uploaded_dbs.insert(0, default_name)
-    
-    # Determine current database
-    current = None
-    if hasattr(app.state, 'current_db') and app.state.current_db:
-        current_path = Path(app.state.current_db)
-        if current_path == DATABASE_PATH:
-            current = default_name
-        else:
-            current = current_path.stem
-    elif Path(DATABASE_PATH).exists():
-        current = default_name
-    
+    """Return the configured Neon/PostgreSQL database."""
+    connected, database_name, _ = _sync_database_status()
+
     return {
-        "databases": uploaded_dbs,
-        "current": current
+        "databases": [database_name] if DATABASE_URL else [],
+        "current": database_name if connected else None,
+        "provider": "neon",
+        "connected": connected,
     }
+
 
 @app.post("/databases/{db_name}/select")
 def select_database(db_name: str):
-    """Select a database to use."""
-    if db_name == "default":
-        db_path = str(DATABASE_PATH)
-    else:
-        db_path = str(UPLOADED_DB_DIR / f"{db_name}.db")
-    
-    if not Path(db_path).exists():
-        raise HTTPException(status_code=404, detail=f"Database '{db_name}' not found")
-    
-    # Reinitialize agent with new database
-    app.state.current_db = db_path
-    app.state.agent.close()
-    app.state.agent = SQLAgent(db_path=db_path)
-    
-    return {
-        "success": True,
-        "message": f"Switched to database: {db_name}",
-        "database": db_name
-    }
+    """Neon uses the configured DATABASE_URL, so runtime DB switching is disabled."""
+    raise HTTPException(
+        status_code=400,
+        detail="Database switching is disabled. Set DATABASE_URL/NEON_DATABASE_URL to choose the Neon database.",
+    )
+
 
 @app.post("/upload-database")
-async def upload_database(file: UploadFile = File(...)):
-    """Upload a SQLite database."""
+async def upload_database():
+    """SQLite file upload is no longer supported after moving to Neon PostgreSQL."""
+    raise HTTPException(
+        status_code=410,
+        detail="SQLite uploads are no longer supported. Configure a Neon PostgreSQL DATABASE_URL instead.",
+    )
+
+
+@app.post("/upload-data")
+async def upload_data(file: UploadFile = File(...)):
+    """Upload a CSV file and import it as a new Neon/PostgreSQL table."""
+    if not hasattr(app.state, "agent") or app.state.agent is None:
+        raise HTTPException(status_code=500, detail="Agent not initialized")
+
+    connected, _, connection_error = _sync_database_status()
+    if not connected:
+        detail = "No Neon PostgreSQL database is currently connected"
+        if connection_error:
+            detail = f"{detail}: {connection_error}"
+        raise HTTPException(status_code=400, detail=detail)
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
-    
-    if not file.filename.endswith('.db'):
-        raise HTTPException(status_code=400, detail="Only .db files are allowed")
-    
-    try:
-        # Save the file to uploaded_dbs directory
-        db_path = UPLOADED_DB_DIR / file.filename
-        
-        # Read and save file content
-        content = await file.read()
-        with open(db_path, "wb") as buffer:
-            buffer.write(content)
-        
-        # Verify it's a valid SQLite database
-        import sqlite3
-        try:
-            conn = sqlite3.connect(str(db_path), check_same_thread=False)
-            conn.execute("SELECT 1")
-            conn.close()
-        except sqlite3.DatabaseError:
-            # Clean up invalid file
-            db_path.unlink()
-            raise HTTPException(status_code=400, detail="Invalid SQLite database file")
-        
-        # Automatically select the uploaded database
-        if hasattr(app.state, 'agent') and app.state.agent:
-            app.state.agent.close()
-        
-        app.state.current_db = str(db_path)
-        app.state.agent = SQLAgent(db_path=str(db_path))
-        
-        db_name = file.filename[:-3]  # Remove .db extension
-        
-        print(f"✓ Database '{db_name}' uploaded and selected successfully")
-        
-        return {
-            "success": True,
-            "message": f"Database '{db_name}' uploaded and activated",
-            "database": db_name
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"✗ Upload failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload database: {str(e)}")
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="Data size is larger than 5 MB")
+
+    result = app.state.agent.db_tools.upload_csv_data(file.filename, content)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed to upload data"))
+
+    return result
+
 
 @app.post("/execute-sql")
 def execute_raw_sql(req: QuestionRequest):
-    """Execute raw SQL query directly on the selected database."""
+    """Validate and execute raw read-only SQL on Neon/PostgreSQL."""
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="SQL query cannot be empty")
-    
-    if not hasattr(app.state, 'agent') or app.state.agent is None:
+
+    if not hasattr(app.state, "agent") or app.state.agent is None:
         raise HTTPException(status_code=500, detail="Agent not initialized. Please set GEMINI_API_KEY in .env file.")
-    
+
     if not app.state.agent.database_available:
-        raise HTTPException(status_code=400, detail="No database is currently selected")
-    
+        raise HTTPException(status_code=400, detail="No Neon PostgreSQL database is currently connected")
+
     try:
         sql_query = req.question.strip()
-        
-        # Use the agent's execute_sql tool
-        result = app.state.agent.db_tools.execute_sql(sql_query)
-        
+        is_valid, message, modified_sql = app.state.agent.db_tools.validate_sql(sql_query)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=message)
+
+        sql_to_execute = modified_sql or sql_query
+        result = app.state.agent.db_tools.execute_sql(sql_to_execute)
+
         if result.get("success"):
             return {
                 "success": True,
-                "sql": sql_query,
+                "sql": sql_to_execute,
                 "result": {
                     "columns": result.get("columns", []),
-                    "rows": result.get("results", [])
+                    "rows": result.get("results", []),
                 },
                 "status": "success",
-                "message": f"Query executed successfully. {len(result.get('results', []))} row(s) returned."
+                "message": f"Query executed successfully. {len(result.get('results', []))} row(s) returned.",
+                "validation_message": message,
             }
-        else:
-            raise HTTPException(status_code=400, detail=result.get("error", "Query execution failed"))
-    
+
+        raise HTTPException(status_code=400, detail=result.get("error", "Query execution failed"))
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error executing SQL: {str(e)}")
+
 
 @app.post("/ask")
 def ask_question(req: QuestionRequest):
     """Process a natural language question and return SQL results."""
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
-    
-    if not hasattr(app.state, 'agent') or app.state.agent is None:
+
+    if not hasattr(app.state, "agent") or app.state.agent is None:
         raise HTTPException(status_code=500, detail="Agent not initialized. Please set GEMINI_API_KEY in .env file.")
 
     try:
-        result = app.state.agent.process_question(
+        return app.state.agent.process_question(
             req.question.strip(),
-            show_reasoning=req.show_reasoning
+            show_reasoning=req.show_reasoning,
         )
-        return result
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/database/view")
 def view_database():
-    """Get database schema and sample data for all tables."""
-    if not hasattr(app.state, 'agent') or app.state.agent is None:
+    """Get PostgreSQL schema and sample data for all user tables."""
+    if not hasattr(app.state, "agent") or app.state.agent is None:
         raise HTTPException(status_code=500, detail="Agent not initialized")
-    
+
     if not app.state.agent.database_available:
-        raise HTTPException(status_code=404, detail="No database is currently selected")
-    
-    try:
-        import sqlite3
-        db_path = app.state.agent.db_tools.db_path
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        cursor = conn.cursor()
-        
-        # Get all tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        tables = [row[0] for row in cursor.fetchall()]
-        
-        result = {
-            "database": Path(db_path).stem,
-            "tables": []
-        }
-        
-        for table_name in tables:
-            # Get table schema
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns_info = cursor.fetchall()
-            columns = [
-                {
-                    "name": col[1],
-                    "type": col[2],
-                    "notnull": bool(col[3]),
-                    "default_value": col[4],
-                    "pk": bool(col[5])
-                }
-                for col in columns_info
-            ]
-            
-            # Get row count
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-            row_count = cursor.fetchone()[0]
-            
-            # Get sample data (first 5 rows)
-            cursor.execute(f"SELECT * FROM {table_name} LIMIT 5")
-            sample_rows = cursor.fetchall()
-            column_names = [col[0] for col in cursor.description]
-            
-            sample_data = [
-                {col: row[i] for i, col in enumerate(column_names)}
-                for row in sample_rows
-            ]
-            
-            result["tables"].append({
-                "name": table_name,
-                "columns": columns,
-                "row_count": row_count,
-                "sample_data": sample_data
-            })
-        
-        conn.close()
-        
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to view database: {str(e)}")
+        raise HTTPException(status_code=404, detail="No Neon PostgreSQL database is currently connected")
+
+    result = app.state.agent.db_tools.get_database_view()
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
 
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
+    agent = getattr(app.state, "agent", None)
+    connected, database_name, connection_error = _sync_database_status()
     return {
         "status": "healthy",
-        "agent_initialized": hasattr(app.state, 'agent') and app.state.agent is not None,
-        "database_available": hasattr(app.state, 'agent') and app.state.agent and app.state.agent.database_available
+        "agent_initialized": agent is not None,
+        "database_available": connected,
+        "database_name": database_name,
+        "database_provider": "neon",
+        "connection_error": connection_error,
     }
-
-
-# port = int(os.environ.get("PORT", 8000))
-# uvicorn.run(app, host="0.0.0.0", port=port)
-
-# if __name__ == "__main__":
-#     port = int(os.environ.get("PORT", 8000))
-#     uvicorn.run(app, host="0.0.0.0", port=port)

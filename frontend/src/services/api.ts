@@ -3,7 +3,16 @@
  */
 
 // const API_BASE_URL = 'https://ai-sql-agent-4.onrender.com';
-const API_BASE_URL = import.meta.env.VITE_API_URL;
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:8000';
+export const MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024;
+
+export interface HealthResponse {
+  status: string;
+  agent_initialized: boolean;
+  database_available: boolean;
+  database_provider: string;
+}
 
 export interface AskResponse {
   success: boolean;
@@ -69,6 +78,21 @@ export async function askQuestion(question: string, showReasoning: boolean = tru
 export interface DatabaseInfo {
   databases: string[];
   current: string | null;
+  provider?: string;
+  connected: boolean;
+}
+
+export async function getHealth(): Promise<HealthResponse | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`);
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching health:', error);
+    return null;
+  }
 }
 
 export async function listDatabases(): Promise<DatabaseInfo> {
@@ -77,58 +101,31 @@ export async function listDatabases(): Promise<DatabaseInfo> {
     if (!response.ok) {
       throw new Error(`Failed to fetch databases: ${response.statusText}`);
     }
-    return await response.json();
+    const data = await response.json();
+    return {
+      databases: data.databases ?? [],
+      current: data.current ?? null,
+      provider: data.provider ?? 'neon',
+      connected: Boolean(data.connected),
+    };
   } catch (error) {
     console.error('Error listing databases:', error);
-    return { databases: [], current: null };
+    return { databases: [], current: null, provider: 'neon', connected: false };
   }
 }
 
-export async function selectDatabase(dbName: string): Promise<{ success: boolean; message: string }> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/select`, {
-      method: 'POST',
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to select database: ${response.statusText}`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error('Error selecting database:', error);
-    throw error;
-  }
-}
+/** Load DB metadata and connection status; /health is authoritative for connected. */
+export async function fetchConnectionStatus(): Promise<DatabaseInfo> {
+  const [health, databases] = await Promise.all([getHealth(), listDatabases()]);
+  const connected = health?.database_available ?? databases.connected;
 
-export async function uploadDatabase(file: File): Promise<{ success: boolean; message: string; database: string }> {
-  try {
-    console.log('Starting upload for file:', file.name);
-    console.log('API URL:', API_BASE_URL);
-    
-    const formData = new FormData();
-    formData.append('file', file);
-
-    console.log('Sending request to:', `${API_BASE_URL}/upload-database`);
-
-    const response = await fetch(`${API_BASE_URL}/upload-database`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    console.log('Response status:', response.status);
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('Upload failed:', errorData);
-      throw new Error(errorData.detail || `Failed to upload database: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    console.log('Upload successful:', result);
-    return result;
-  } catch (error) {
-    console.error('Error uploading database:', error);
-    throw error;
-  }
+  return {
+    ...databases,
+    connected,
+    current: connected
+      ? databases.current ?? databases.databases[0] ?? null
+      : databases.current,
+  };
 }
 
 export interface DatabaseColumn {
@@ -148,6 +145,7 @@ export interface DatabaseTable {
 
 export interface DatabaseView {
   database: string;
+  dialect?: string;
   tables: DatabaseTable[];
 }
 
@@ -162,6 +160,41 @@ export async function viewDatabase(): Promise<DatabaseView> {
   } catch (error) {
     console.error('Error viewing database:', error);
     throw error;
+  }
+}
+
+export interface UploadDataResponse {
+  success: boolean;
+  table?: string;
+  columns?: string[];
+  rows_inserted?: number;
+  message?: string;
+  error?: string;
+}
+
+export async function uploadData(file: File): Promise<UploadDataResponse> {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE_URL}/upload-data`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `Failed to upload data: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to upload data';
+    console.error('Data upload error:', errorMessage);
+    return {
+      success: false,
+      error: errorMessage,
+    };
   }
 }
 

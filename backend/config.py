@@ -1,16 +1,16 @@
-"""
-Configuration settings for the Natural Language to SQL system.
-"""
 import os
-from pathlib import Path
 
-# Project paths
-PROJECT_ROOT = Path(__file__).parent
-DATA_DIR = PROJECT_ROOT / "data"
-DATABASE_PATH = DATA_DIR / "chinook.db"
+"""
+Configuration settings for the Natural Language to PostgreSQL system.
+"""
 
 # API Configuration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# Neon/PostgreSQL configuration. Neon provides a PostgreSQL connection string
+# that usually starts with "postgresql://".
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("NEON_DATABASE_URL") or ""
+DATABASE_NAME = os.getenv("DATABASE_NAME", "Neon PostgreSQL")
 
 # Model settings
 MODEL_NAME = "gemini-2.5-flash-lite"  # Fast and free
@@ -20,7 +20,11 @@ MAX_RETRIES = 2  # Maximum retry attempts for failed queries
 # Safety settings
 MAX_QUERY_TIMEOUT = 5  # seconds
 DEFAULT_LIMIT = 100  # Default LIMIT for queries without one
-BLOCKED_KEYWORDS = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE"]
+MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB CSV upload limit
+BLOCKED_KEYWORDS = [
+    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE",
+    "GRANT", "REVOKE", "VACUUM", "CALL", "DO", "COPY"
+]
 
 # Display settings
 SHOW_REASONING = True

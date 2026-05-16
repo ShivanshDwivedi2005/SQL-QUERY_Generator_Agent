@@ -1,30 +1,27 @@
 """
-Main CLI interface for the Natural Language to SQL system.
+Main CLI interface for the Natural Language to PostgreSQL system.
 """
 import os
 import sys
-from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables FIRST before importing config
-load_dotenv()
+load_dotenv(override=True)
 
 from src.agent import SQLAgent
 from src.display import display_welcome, display_error, display_thinking, console
-from config import DATABASE_PATH
+from config import DATABASE_URL
 
 
 def run_interactive_mode():
     """Run the system in interactive CLI mode."""
     display_welcome()
     
-    # Check if database exists
-    if not DATABASE_PATH.exists():
-        display_error(f"Database not found at {DATABASE_PATH}")
-        console.print("\n[yellow]Please download the Chinook database:[/yellow]")
-        console.print("1. Visit: https://github.com/lerocha/chinook-database")
-        console.print("2. Download chinook.db (SQLite version)")
-        console.print(f"3. Place it in: {DATABASE_PATH}")
+    # Check for Neon/PostgreSQL database URL
+    if not DATABASE_URL:
+        display_error("DATABASE_URL or NEON_DATABASE_URL not found in environment")
+        console.print("\n[yellow]Create a Neon project and add its PostgreSQL connection string:[/yellow]")
+        console.print("DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require")
         return
     
     # Check for API key
@@ -92,8 +89,8 @@ def run_demo_queries():
     console.print("[bold green]🎬 Running Demo Queries[/bold green]\n")
     
     # Check database
-    if not DATABASE_PATH.exists():
-        display_error(f"Database not found at {DATABASE_PATH}")
+    if not DATABASE_URL:
+        display_error("DATABASE_URL or NEON_DATABASE_URL not found in environment")
         return
     
     # Initialize agent
